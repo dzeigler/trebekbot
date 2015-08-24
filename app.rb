@@ -80,9 +80,9 @@ def json_response_for_slack(reply)
   response.to_json
 end
 
-def send_reply_to_slack(channel_id, text) 
+def send_reply_to_slack(channel, text) 
   payload = {}
-  payload["channel_id"] = channel_id
+  payload["channel"] = "##{channel}"
   payload["text"] = text
   payload["username"] = ENV["BOT_USERNAME"] unless ENV["BOT_USERNAME"].nil?
   payload["icon_emoji"] = ENV["BOT_ICON"] unless ENV["BOT_ICON"].nil?
@@ -106,6 +106,7 @@ end
 # 
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
+  channel_name = params[:channel_name]
   question = ""
   unless $redis.exists("shush:question:#{channel_id}")
     response = get_question category
@@ -122,7 +123,7 @@ def respond_with_question(params, category = nil)
       $redis.setex("shush:question:#{channel_id}", 10, "true")
       $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
     end
-    start_timer(channel_id, response)
+    start_timer(channel_id, channel_name, response)
   end
   question
 end
@@ -156,11 +157,11 @@ def get_question(category_key = nil)
   response
 end
 
-def start_timer(channel_id, response) 
-  Concurrent::ScheduledTask.execute(ENV["SECONDS_TO_ANSWER"]){ end_round(channel_id, response) }
+def start_timer(channel_id, channel_name, response) 
+  Concurrent::ScheduledTask.execute(ENV["SECONDS_TO_ANSWER"]){ end_round(channel_id, channel_name, response) }
 end
 
-def end_round(channel_id, response) 
+def end_round(channel_id, channel_name, response) 
   puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
   # make sure the current question is the same one we were waiting for
   key = "current_question:#{channel_id}"
@@ -169,7 +170,7 @@ def end_round(channel_id, response)
   if response["id"] == current_question["id"]
     reply = "Time's up! The correct answer is `#{current_question["answer"]}`."
     puts "[LOG] sending reply: #{reply}"
-    send_reply_to_slack(channel_id, reply)
+    send_reply_to_slack(channel_name, reply)
     mark_question_as_answered(channel_id)
   end
 end
