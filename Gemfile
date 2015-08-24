@@ -1,5 +1,5 @@
 source "https://rubygems.org"
-ruby "2.2.0"
+ruby "2.2.1"
 
 gem "sinatra"
 gem "thin"
@@ -9,3 +9,5 @@ gem "httparty"
 gem "foreman"
 gem "text"
 gem "sanitize"
+gem "concurrent-ruby"
+gem "rest-client"
