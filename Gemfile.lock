@@ -29,6 +29,8 @@ GEM
     rack-protection (1.5.3)
       rack
     redis (3.2.0)
+    redis-semaphore (0.2.4)
+      redis
     rest-client (1.8.0)
       http-cookie (>= 1.0.2, < 2.0)
       mime-types (>= 1.16, < 3.0)
@@ -61,6 +63,7 @@ DEPENDENCIES
   foreman
   httparty
   redis
+  redis-semaphore
   rest-client
   sanitize
   sinatra

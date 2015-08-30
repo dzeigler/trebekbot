@@ -8,6 +8,7 @@ require "text"
 require "sanitize"
 require 'concurrent'
 require 'rest-client'
+require 'redis-semaphore'
 
 configure do
   # Load .env vars
@@ -107,23 +108,27 @@ end
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
   channel_name = params[:channel_name]
+  s = Redis::Semaphore.new(channel_id, :host => "localhost")
   question = ""
-  unless $redis.exists("shush:question:#{channel_id}")
-    response = get_question category
-    key = "current_question:#{channel_id}"
-    previous_question = $redis.get(key)
-    if !previous_question.nil?
-      previous_question = JSON.parse(previous_question)["answer"]
-      question = "The answer is `#{previous_question}`.\n"
+  s.lock do
+    
+    unless $redis.exists("shush:question:#{channel_id}")
+      response = get_question category
+      key = "current_question:#{channel_id}"
+      previous_question = $redis.get(key)
+      if !previous_question.nil?
+        previous_question = JSON.parse(previous_question)["answer"]
+        question = "The answer is `#{previous_question}`.\n"
+      end
+      question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}: `#{response["question"]}`"
+      puts "[LOG] ID: #{response["id"]} | Category: #{response["category"]["title"]} | Question: #{response["question"]} | Answer: #{response["answer"]} | Value: #{response["value"]}"
+      $redis.pipelined do
+        $redis.set(key, response.to_json)
+        $redis.setex("shush:question:#{channel_id}", 10, "true")
+        $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
+      end
+      start_timer(channel_id, channel_name, response)
     end
-    question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}: `#{response["question"]}`"
-    puts "[LOG] ID: #{response["id"]} | Category: #{response["category"]["title"]} | Question: #{response["question"]} | Answer: #{response["answer"]} | Value: #{response["value"]}"
-    $redis.pipelined do
-      $redis.set(key, response.to_json)
-      $redis.setex("shush:question:#{channel_id}", 10, "true")
-      $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
-    end
-    start_timer(channel_id, channel_name, response)
   end
   question
 end
@@ -136,9 +141,9 @@ end
 # Adds an "expiration" value, which is the timestamp of the Slack request + the seconds to answer config var
 # 
 def get_question(category_key = nil)
-	if !category_key.nil? && data = $redis.get("category:#{category_key}")
-		category = JSON.parse(data)
-		offset = rand(category['clues_count'])
+  if !category_key.nil? && data = $redis.get("category:#{category_key}")
+               category = JSON.parse(data)
+               offset = rand(category['clues_count'])
     uri = "http://jservice.io/api/clues?category=#{category['id']}&offset=#{offset}"
   else
     uri = "http://jservice.io/api/random?count=1"
@@ -163,15 +168,18 @@ end
 
 def end_round(channel_id, channel_name, response) 
   puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
-  # make sure the current question is the same one we were waiting for
-  key = "current_question:#{channel_id}"
-  current_question = $redis.get(key)
-  current_question = JSON.parse(current_question)
-  if response["id"] == current_question["id"]
-    reply = "Time's up! The correct answer is `#{current_question["answer"]}`."
-    puts "[LOG] sending reply: #{reply}"
-    send_reply_to_slack(channel_name, reply)
-    mark_question_as_answered(channel_id)
+  s = Redis::Semaphore.new(channel_id, :host => "localhost")
+  s.lock do
+    # make sure the current question is the same one we were waiting for
+    key = "current_question:#{channel_id}"
+    current_question = $redis.get(key)
+    current_question = JSON.parse(current_question)
+    if response["id"] == current_question["id"]
+      reply = "Time's up! The correct answer is `#{current_question["answer"]}`."
+      puts "[LOG] sending reply: #{reply}"
+      send_reply_to_slack(channel_name, reply)
+      mark_question_as_answered(channel_id)
+    end
   end
 end
 
@@ -208,37 +216,41 @@ end
 def process_answer(params)
   channel_id = params[:channel_id]
   user_id = params[:user_id]
-  key = "current_question:#{channel_id}"
-  current_question = $redis.get(key)
   reply = ""
-  if current_question.nil?
-    reply = trebek_me if !$redis.exists("shush:answer:#{channel_id}")
-  else
-    current_question = JSON.parse(current_question)
-    current_answer = current_question["answer"]
-    user_answer = params[:text]
-    answered_key = "user_answer:#{channel_id}:#{current_question["id"]}:#{user_id}"
-    if $redis.exists(answered_key)
-      reply = "You had your chance, #{get_slack_name(user_id)}. Let someone else answer."
-    elsif params["timestamp"].to_f > current_question["expiration"]
-      if is_correct_answer?(current_answer, user_answer)
-        reply = "That is correct, #{get_slack_name(user_id)}, but time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
-      else
-        reply = "Time's up, #{get_slack_name(user_id)}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
-      end
-      mark_question_as_answered(params[:channel_id])
-    elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
-      score = update_score(user_id, current_question["value"])
-      reply = "That is correct, #{get_slack_name(user_id)}. Your total score is #{currency_format(score)}."
-      mark_question_as_answered(params[:channel_id])
-    elsif is_correct_answer?(current_answer, user_answer)
-      score = update_score(user_id, (current_question["value"] * -1))
-      reply = "That is correct, #{get_slack_name(user_id)}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
-      $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+  s = Redis::Semaphore.new(channel_id, :host => "localhost")
+  s.lock do
+    key = "current_question:#{channel_id}"
+    current_question = $redis.get(key)
+    
+    if current_question.nil?
+      reply = trebek_me if !$redis.exists("shush:answer:#{channel_id}")
     else
-      score = update_score(user_id, (current_question["value"] * -1))
-      reply = "That is incorrect, #{get_slack_name(user_id)}. Your score is now #{currency_format(score)}."
-      $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+      current_question = JSON.parse(current_question)
+      current_answer = current_question["answer"]
+      user_answer = params[:text]
+      answered_key = "user_answer:#{channel_id}:#{current_question["id"]}:#{user_id}"
+      if $redis.exists(answered_key)
+        reply = "You had your chance, #{get_slack_name(user_id)}. Let someone else answer."
+      elsif params["timestamp"].to_f > current_question["expiration"]
+        if is_correct_answer?(current_answer, user_answer)
+          reply = "That is correct, #{get_slack_name(user_id)}, but time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
+        else
+          reply = "Time's up, #{get_slack_name(user_id)}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
+        end
+        mark_question_as_answered(params[:channel_id])
+      elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
+        score = update_score(user_id, current_question["value"])
+        reply = "That is correct, #{get_slack_name(user_id)}. Your total score is #{currency_format(score)}."
+        mark_question_as_answered(params[:channel_id])
+      elsif is_correct_answer?(current_answer, user_answer)
+        score = update_score(user_id, (current_question["value"] * -1))
+        reply = "That is correct, #{get_slack_name(user_id)}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
+        $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+      else
+        score = update_score(user_id, (current_question["value"] * -1))
+        reply = "That is incorrect, #{get_slack_name(user_id)}. Your score is now #{currency_format(score)}."
+        $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+      end
     end
   end
   reply
