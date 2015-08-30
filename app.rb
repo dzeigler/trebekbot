@@ -109,8 +109,8 @@ end
 # Puts together the response to a request to start a new round (`go`):
 # If the bot has been "shushed", says nothing.
 # Otherwise, speaks the answer to the previous round (if any),
-# speaks the category, value, and the new question, and shushes the bot for 10 seconds
-# (this is so two or more users can't do `go` within 10 seconds of each other.)
+# speaks the category, value, and the new question, and shushes the bot for ENV["SECONDS_TO_ANSWER"] seconds
+# (this is so two or more users can't do `go` within ENV["SECONDS_TO_ANSWER"] seconds of each other.)
 # 
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
@@ -132,7 +132,7 @@ def respond_with_question(params, category = nil)
       puts "[LOG] ID: #{response["id"]} | Category: #{response["category"]["title"]} | Question: #{response["question"]} | Answer: #{response["answer"]} | Value: #{response["value"]}"
       $redis.pipelined do
         $redis.set(key, response.to_json)
-        $redis.setex("shush:question:#{channel_id}", 10, "true")
+        $redis.setex("shush:question:#{channel_id}", ENV["SECONDS_TO_ANSWER"], "true")
         $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
       end
       start_timer(channel_id, channel_name, response)
