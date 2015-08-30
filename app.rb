@@ -23,8 +23,10 @@ configure do
   when :production
     uri = URI.parse(ENV["REDISCLOUD_URL"])
   end
+  $redis_uri = uri
   $redis = Redis.new(host: uri.host, port: uri.port, password: uri.password)
 end
+
 
 # Handles the POST request made by the Slack Outgoing webhook
 # Params sent in the request:
@@ -40,30 +42,44 @@ end
 # trigger_word=trebekbot
 # 
 post "/" do
+  response = ""
   begin
     puts "[LOG] #{params}"
-    if params[:text].match(params[:trigger_word]+" ")
+    if !params[:trigger_word].nil? && params[:text].match(params[:trigger_word]+" ")
       params[:text] = params[:text].sub(params[:trigger_word] + " ", "").strip 
-      if params[:token] != ENV["OUTGOING_WEBHOOK_TOKEN"]
-        response = "Invalid token"
-      elsif is_channel_blacklisted?(params[:channel_name])
-        response = "Sorry, can't play in this channel."
-      elsif params[:text].match(/^go$/i) || params[:text].match(/^jeopardy me/i)
-        response = respond_with_question(params)
-      elsif params[:text].match(/my score$/i)
-        response = respond_with_user_score(params[:user_id])
-      elsif params[:text].match(/^help$/i)
-        response = respond_with_help
-      elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
-        response = respond_with_leaderboard
-      elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
-        response = respond_with_loserboard
-      elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
-        response = respond_with_categories
-      elsif matches = params[:text].match(/^I.ll take (.*)/i)
-        response = respond_with_question(params, matches[1])
-      else
-        response = process_answer(params)
+      
+      puts "[LOG] (post) acquiring lock for #{params[:channel_id]}"
+      s = Redis::Semaphore.new(params[:channel_id], :redis => $redis, :stale_client_timeout => 10)
+      s.lock do
+        puts "[LOG] (post) lock acquired for #{params[:channel_id]}"
+        if params[:token] != ENV["OUTGOING_WEBHOOK_TOKEN"]
+          response = "Invalid token"
+        elsif is_channel_blacklisted?(params[:channel_name])
+          response = "Sorry, can't play in this channel."
+        elsif params[:text].match(/^go$/i) || params[:text].match(/^jeopardy me/i)
+          $redis.set("auto_clue:enabled:#{params[:channel_id]}", false)
+          response = respond_with_question(params)
+        elsif params[:text].match(/^go auto$/i) || params[:text].match(/^jeopardy me/i)
+          $redis.set("auto_clue:enabled:#{params[:channel_id]}", true)
+          $redis.set("auto_clue:counter:#{params[:channel_id]}", get_auto_clue_counter_default())
+          response = respond_with_question(params)
+        elsif params[:text].match(/my score$/i)
+          response = respond_with_user_score(params[:user_id])
+        elsif params[:text].match(/^help$/i)
+          response = respond_with_help
+        elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
+          response = respond_with_leaderboard
+        elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
+          response = respond_with_loserboard
+        elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
+          response = respond_with_categories
+        elsif matches = params[:text].match(/^I.ll take (.*)/i)
+          $redis.set("auto_clue:enabled:#{params[:channel_id]}", false)
+          response = respond_with_question(params, matches[1])
+        else
+          response = process_answer(params)
+        end
+        puts "[LOG] (post) releasing lock for #{params[:channel_id]}"
       end
     end
   rescue => e
@@ -115,31 +131,31 @@ end
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
   channel_name = params[:channel_name]
-  puts "[LOG] acquiring lock for #{channel_id}"
-  s = Redis::Semaphore.new(channel_id, :redis => $redis)
-  question = ""
-  s.lock do
-    puts "[LOG] lock acquired for #{channel_id}"
-    unless $redis.exists("shush:question:#{channel_id}")
-      response = get_question category
-      key = "current_question:#{channel_id}"
-      previous_question = $redis.get(key)
-      if !previous_question.nil?
-        previous_question = JSON.parse(previous_question)["answer"]
-        question = "The answer is `#{previous_question}`.\n"
-      end
-      question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}: `#{response["question"]}`"
-      puts "[LOG] ID: #{response["id"]} | Category: #{response["category"]["title"]} | Question: #{response["question"]} | Answer: #{response["answer"]} | Value: #{response["value"]}"
-      $redis.pipelined do
-        $redis.set(key, response.to_json)
-        $redis.setex("shush:question:#{channel_id}", ENV["SECONDS_TO_ANSWER"], "true")
-        $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
-      end
-      start_timer(channel_id, channel_name, response)
-    end
-    puts "[LOG] releasing lock for #{channel_id}"
-  end
   
+  question = ""
+  unless $redis.exists("shush:question:#{channel_id}")
+    response = get_question category
+    key = "current_question:#{channel_id}"
+    previous_question = $redis.get(key)
+    if !previous_question.nil?
+      previous_question = JSON.parse(previous_question)["answer"]
+      question = "The answer is `#{previous_question}`.\n"
+    end
+    question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}: `#{response["question"]}`"
+    puts "[LOG] ID: #{response["id"]} | Category: #{response["category"]["title"]} | Question: #{response["question"]} | Answer: #{response["answer"]} | Value: #{response["value"]}"
+    puts "[LOG] question: #{question}"
+    $redis.pipelined do
+      $redis.set(key, response.to_json)
+      $redis.setex("shush:question:#{channel_id}", ENV["SECONDS_TO_ANSWER"], "true")
+      $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
+    end
+    start_timer(params, response)
+    if $redis.get("auto_clue:enabled:#{channel_id}") == "true"
+      auto_clue_counter = $redis.get("auto_clue:counter:#{channel_id}").to_i
+      $redis.set("auto_clue:counter:#{channel_id}", auto_clue_counter-1)
+      puts "[LOG] auto clue counter decremented to #{auto_clue_counter-1}"
+    end
+  end
   question
 end
 
@@ -172,16 +188,21 @@ def get_question(category_key = nil)
   response
 end
 
-def start_timer(channel_id, channel_name, response) 
-  Concurrent::ScheduledTask.execute(ENV["SECONDS_TO_ANSWER"]){ end_round(channel_id, channel_name, response) }
+def start_timer(params, response) 
+  Concurrent::ScheduledTask.execute(ENV["SECONDS_TO_ANSWER"]){ end_round(params, response) }
 end
 
-def end_round(channel_id, channel_name, response) 
-  puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
-  puts "[LOG] acquiring lock for #{channel_id}"
-  s = Redis::Semaphore.new(channel_id, :redis => $redis)
+def end_round(params, response) 
+  channel_id = params[:channel_id]
+  channel_name = params[:channel_name]
+  # redis-semaphore requires a 2nd redis connection. https://github.com/dv/redis-semaphore/issues/18
+  redis2 = Redis.new(host: $redis_uri.host, port: $redis_uri.port, password: $redis_uri.password)
+  puts "[LOG] (end_round) acquiring lock for #{params[:channel_id]}"
+  s = Redis::Semaphore.new(params[:channel_id], :redis => redis2, :stale_client_timeout => 10)
   s.lock do
-    puts "[LOG] lock acquired for #{channel_id}"
+    puts "[LOG] (end_round) lock acquired for #{params[:channel_id]}"
+    puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
+  
     
     # make sure the current question is the same one we were waiting for
     key = "current_question:#{channel_id}"
@@ -189,13 +210,46 @@ def end_round(channel_id, channel_name, response)
     current_question = JSON.parse(current_question)
     if response["id"] == current_question["id"]
       reply = "Time's up! The correct answer is `#{current_question["answer"]}`."
+      mark_question_as_answered(channel_id)
+      
+      auto_clue_enabled = $redis.get("auto_clue:enabled:#{channel_id}")
+      auto_clue_counter = $redis.get("auto_clue:counter:#{channel_id}")
+      puts "[LOG] auto_clue.enabled=#{auto_clue_enabled} auto_clue.counter=#{auto_clue_counter}"
+      if auto_clue_enabled == "true" 
+        if !auto_clue_counter.nil? && auto_clue_counter.to_i <= 0
+          reply += " " + trebek_take_a_break()
+          $redis.set("auto_clue:enabled:#{channel_id}", false)
+        else
+          prepare_to_get_next_auto_clue(params)
+        end
+      end
       puts "[LOG] sending reply: #{reply}"
       send_reply_to_slack(channel_name, reply)
-      mark_question_as_answered(channel_id)
     end
-    puts "[LOG] releasing lock for #{channel_id}"
+    puts "[LOG] (end_round) releasing lock for #{params[:channel_id]}"
   end
+  puts "[LOG] (end_round) released lock for #{params[:channel_id]}"
+  reply
 end
+
+def prepare_to_get_next_auto_clue(params)
+  Concurrent::Future.execute{ get_next_auto_clue(params) }
+end
+
+def get_next_auto_clue(params)
+  redis2 = Redis.new(host: $redis_uri.host, port: $redis_uri.port, password: $redis_uri.password)
+  puts "[LOG] (get_next_auto_clue) acquiring lock for #{params[:channel_id]}"
+  s = Redis::Semaphore.new(params[:channel_id], :redis => redis2, :stale_client_timeout => 10)
+  question = ""
+  s.lock do
+    puts "[LOG] (get_next_auto_clue) lock acquired for #{params[:channel_id]}"
+    question = respond_with_question(params)
+    puts "[LOG] (get_next_auto_clue) releasing lock for #{params[:channel_id]}"
+  end
+  puts "[LOG] (get_next_auto_clue) sending question #{question}"
+  send_reply_to_slack(params[:channel_name], question)
+end
+
 
 # Puts together the response to a request for categories:
 #
@@ -231,44 +285,43 @@ def process_answer(params)
   channel_id = params[:channel_id]
   user_id = params[:user_id]
   reply = ""
-  puts "[LOG] acquiring lock for #{channel_id}"
-  s = Redis::Semaphore.new(channel_id, :redis => $redis)
-  s.lock do
-    puts "[LOG] lock acquired for #{channel_id}"
-    key = "current_question:#{channel_id}"
-    current_question = $redis.get(key)
-    
-    if current_question.nil?
-      reply = trebek_me if !$redis.exists("shush:answer:#{channel_id}")
-    else
-      current_question = JSON.parse(current_question)
-      current_answer = current_question["answer"]
-      user_answer = params[:text]
-      answered_key = "user_answer:#{channel_id}:#{current_question["id"]}:#{user_id}"
-      if $redis.exists(answered_key)
-        reply = "You had your chance, #{get_slack_name(user_id)}. Let someone else answer."
-      elsif params["timestamp"].to_f > current_question["expiration"]
-        if is_correct_answer?(current_answer, user_answer)
-          reply = "That is correct, #{get_slack_name(user_id)}, but time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
-        else
-          reply = "Time's up, #{get_slack_name(user_id)}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
-        end
-        mark_question_as_answered(params[:channel_id])
-      elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
-        score = update_score(user_id, current_question["value"])
-        reply = "That is correct, #{get_slack_name(user_id)}. Your total score is #{currency_format(score)}."
-        mark_question_as_answered(params[:channel_id])
-      elsif is_correct_answer?(current_answer, user_answer)
-        score = update_score(user_id, (current_question["value"] * -1))
-        reply = "That is correct, #{get_slack_name(user_id)}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
-        $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+  
+  key = "current_question:#{channel_id}"
+  current_question = $redis.get(key)
+  # whenever there's a guess reset the auto clue counter to the default
+  $redis.set("auto_clue:counter:#{channel_id}", get_auto_clue_counter_default())
+  if current_question.nil?
+    reply = trebek_me if !$redis.exists("shush:answer:#{channel_id}")
+  else
+    current_question = JSON.parse(current_question)
+    current_answer = current_question["answer"]
+    user_answer = params[:text]
+    answered_key = "user_answer:#{channel_id}:#{current_question["id"]}:#{user_id}"
+    if $redis.exists(answered_key)
+      reply = "You had your chance, #{get_slack_name(user_id)}. Let someone else answer."
+    elsif params["timestamp"].to_f > current_question["expiration"]
+      if is_correct_answer?(current_answer, user_answer)
+        reply = "That is correct, #{get_slack_name(user_id)}, but time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
       else
-        score = update_score(user_id, (current_question["value"] * -1))
-        reply = "That is incorrect, #{get_slack_name(user_id)}. Your score is now #{currency_format(score)}."
-        $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+        reply = "Time's up, #{get_slack_name(user_id)}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
       end
+      mark_question_as_answered(params[:channel_id])
+    elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
+      score = update_score(user_id, current_question["value"])
+      reply = "That is correct, #{get_slack_name(user_id)}. Your total score is #{currency_format(score)}."
+      mark_question_as_answered(params[:channel_id])
+    elsif is_correct_answer?(current_answer, user_answer)
+      score = update_score(user_id, (current_question["value"] * -1))
+      reply = "That is correct, #{get_slack_name(user_id)}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
+      $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+    else
+      score = update_score(user_id, (current_question["value"] * -1))
+      reply = "That is incorrect, #{get_slack_name(user_id)}. Your score is now #{currency_format(score)}."
+      $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
     end
-    puts "[LOG] releasing lock for #{channel_id}"
+  end
+  if $redis.get("auto_clue:enabled:#{channel_id}") == "true"
+    prepare_to_get_next_auto_clue(params)
   end
   reply
 end
@@ -559,4 +612,18 @@ Type `#{ENV["BOT_USERNAME"]} show the leaderboard` to see the top scores.
 Type `#{ENV["BOT_USERNAME"]} show the loserboard` to see the bottom scores.
 help
   reply
+end
+
+def trebek_take_a_break
+  [
+    "Let's take a break. Tell me when you're ready to continue.",
+    "It's nap time. Wake me up when we can play again.",
+    "Wow, you guys need to go bone up.",
+    "Now for a word from our sponsors.",
+    "Sorry, I have to go. I have a hot date with urbandictionarybot."
+  ].sample
+end
+
+def get_auto_clue_counter_default
+  ENV["AUTO_CLUE_COUNTER"] || 0
 end
