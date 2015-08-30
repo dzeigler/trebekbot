@@ -109,7 +109,7 @@ def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
   channel_name = params[:channel_name]
   puts "[LOG] acquiring lock for #{channel_id}"
-  s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
+  s = Redis::Semaphore.new(channel_id, :redis => $redis)
   question = ""
   s.lock do
     puts "[LOG] lock acquired for #{channel_id}"
@@ -172,7 +172,7 @@ end
 def end_round(channel_id, channel_name, response) 
   puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
   puts "[LOG] acquiring lock for #{channel_id}"
-  s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
+  s = Redis::Semaphore.new(channel_id, :redis => $redis)
   s.lock do
     puts "[LOG] lock acquired for #{channel_id}"
     
@@ -225,7 +225,7 @@ def process_answer(params)
   user_id = params[:user_id]
   reply = ""
   puts "[LOG] acquiring lock for #{channel_id}"
-  s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
+  s = Redis::Semaphore.new(channel_id, :redis => $redis)
   s.lock do
     puts "[LOG] lock acquired for #{channel_id}"
     key = "current_question:#{channel_id}"
