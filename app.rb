@@ -233,7 +233,7 @@ def end_round(params, response)
 end
 
 def prepare_to_get_next_auto_clue(params)
-  Concurrent::Future.execute{ get_next_auto_clue(params) }
+  Concurrent::ScheduledTask.execute(ENV["AUTO_CLUE_DELAY"]){ get_next_auto_clue(params) }
 end
 
 def get_next_auto_clue(params)
