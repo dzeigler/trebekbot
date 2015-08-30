@@ -108,10 +108,11 @@ end
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
   channel_name = params[:channel_name]
+  puts "[LOG] acquiring lock for #{channel_id}"
   s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
   question = ""
   s.lock do
-    
+    puts "[LOG] lock acquired for #{channel_id}"
     unless $redis.exists("shush:question:#{channel_id}")
       response = get_question category
       key = "current_question:#{channel_id}"
@@ -129,7 +130,9 @@ def respond_with_question(params, category = nil)
       end
       start_timer(channel_id, channel_name, response)
     end
+    puts "[LOG] releasing lock for #{channel_id}"
   end
+  
   question
 end
 
@@ -168,8 +171,11 @@ end
 
 def end_round(channel_id, channel_name, response) 
   puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
+  puts "[LOG] acquiring lock for #{channel_id}"
   s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
   s.lock do
+    puts "[LOG] lock acquired for #{channel_id}"
+    
     # make sure the current question is the same one we were waiting for
     key = "current_question:#{channel_id}"
     current_question = $redis.get(key)
@@ -180,6 +186,7 @@ def end_round(channel_id, channel_name, response)
       send_reply_to_slack(channel_name, reply)
       mark_question_as_answered(channel_id)
     end
+    puts "[LOG] releasing lock for #{channel_id}"
   end
 end
 
@@ -217,8 +224,10 @@ def process_answer(params)
   channel_id = params[:channel_id]
   user_id = params[:user_id]
   reply = ""
+  puts "[LOG] acquiring lock for #{channel_id}"
   s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
   s.lock do
+    puts "[LOG] lock acquired for #{channel_id}"
     key = "current_question:#{channel_id}"
     current_question = $redis.get(key)
     
@@ -252,6 +261,7 @@ def process_answer(params)
         $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
       end
     end
+    puts "[LOG] releasing lock for #{channel_id}"
   end
   reply
 end
