@@ -42,34 +42,41 @@ end
 post "/" do
   begin
     puts "[LOG] #{params}"
-    params[:text] = params[:text].sub(params[:trigger_word] + " ", "").strip 
-    if params[:token] != ENV["OUTGOING_WEBHOOK_TOKEN"]
-      response = "Invalid token"
-    elsif is_channel_blacklisted?(params[:channel_name])
-      response = "Sorry, can't play in this channel."
-    elsif params[:text].match(/^go$/i) || params[:text].match(/^jeopardy me/i)
-      response = respond_with_question(params)
-    elsif params[:text].match(/my score$/i)
-      response = respond_with_user_score(params[:user_id])
-    elsif params[:text].match(/^help$/i)
-      response = respond_with_help
-    elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
-      response = respond_with_leaderboard
-    elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
-      response = respond_with_loserboard
-    elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
-      response = respond_with_categories
-    elsif matches = params[:text].match(/^I.ll take (.*)/i)
-      response = respond_with_question(params, matches[1])
-    else
-      response = process_answer(params)
+    if params[:text].match(params[:trigger_word]+" ")
+      params[:text] = params[:text].sub(params[:trigger_word] + " ", "").strip 
+      if params[:token] != ENV["OUTGOING_WEBHOOK_TOKEN"]
+        response = "Invalid token"
+      elsif is_channel_blacklisted?(params[:channel_name])
+        response = "Sorry, can't play in this channel."
+      elsif params[:text].match(/^go$/i) || params[:text].match(/^jeopardy me/i)
+        response = respond_with_question(params)
+      elsif params[:text].match(/my score$/i)
+        response = respond_with_user_score(params[:user_id])
+      elsif params[:text].match(/^help$/i)
+        response = respond_with_help
+      elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
+        response = respond_with_leaderboard
+      elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
+        response = respond_with_loserboard
+      elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
+        response = respond_with_categories
+      elsif matches = params[:text].match(/^I.ll take (.*)/i)
+        response = respond_with_question(params, matches[1])
+      else
+        response = process_answer(params)
+      end
     end
   rescue => e
     puts "[ERROR] #{e}"
     response = ""
   end
-  status 200
-  body json_response_for_slack(response)
+  
+  if response.nil?
+    status 400
+  else 
+    status 200
+    body json_response_for_slack(response)
+  end
 end
 
 # Puts together the json payload that needs to be sent back to Slack
