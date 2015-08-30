@@ -603,7 +603,8 @@ end
 # 
 def respond_with_help
   reply = <<help
-Type `#{ENV["BOT_USERNAME"]} go` to start a new round of Slack Jeopardy. I will pick the category and price. Anyone in the channel can respond.
+Type `#{ENV["BOT_USERNAME"]} go` to start a new round of Slack Jeopardy. I will pick a category and price. Anyone in the channel can respond.
+Type `#{ENV["BOT_USERNAME"]} go auto` to start a new round of Slack Jeopardy. I will pick the category and price and continue with the next round. Anyone in the channel can respond. I will continue to host as long as contestants are participating.
 Type `#{ENV["BOT_USERNAME"]} [what|where|who] [is|are] [answer]?` to respond to the active round. You have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. Remember, responses must be in the form of a question, e.g. `#{ENV["BOT_USERNAME"]} what is dirt?`.
 Type `#{ENV["BOT_USERNAME"]} show the categories` to see a list of 5 categories to choose.
 Type `#{ENV["BOT_USERNAME"]} I'll take [category]` start a new round with a specific category. I will pick the price.
