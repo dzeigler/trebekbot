@@ -36,18 +36,18 @@ end
 # timestamp=1355517523.000005
 # user_id=U123456
 # user_name=Steve
-# text=trebekbot jeopardy me
+# text=trebekbot go
 # trigger_word=trebekbot
 # 
 post "/" do
   begin
     puts "[LOG] #{params}"
-    params[:text] = params[:text].sub(params[:trigger_word], "").strip 
+    params[:text] = params[:text].sub(params[:trigger_word] + " ", "").strip 
     if params[:token] != ENV["OUTGOING_WEBHOOK_TOKEN"]
       response = "Invalid token"
     elsif is_channel_blacklisted?(params[:channel_name])
       response = "Sorry, can't play in this channel."
-    elsif params[:text].match(/^jeopardy me/i)
+    elsif params[:text].match(/^go$/i) || params[:text].match(/^jeopardy me/i)
       response = respond_with_question(params)
     elsif params[:text].match(/my score$/i)
       response = respond_with_user_score(params[:user_id])
@@ -99,11 +99,11 @@ def is_channel_blacklisted?(channel_name)
   !ENV["CHANNEL_BLACKLIST"].nil? && ENV["CHANNEL_BLACKLIST"].split(",").find{ |a| a.gsub("#", "").strip == channel_name }
 end
 
-# Puts together the response to a request to start a new round (`jeopardy me`):
+# Puts together the response to a request to start a new round (`go`):
 # If the bot has been "shushed", says nothing.
 # Otherwise, speaks the answer to the previous round (if any),
 # speaks the category, value, and the new question, and shushes the bot for 10 seconds
-# (this is so two or more users can't do `jeopardy me` within 10 seconds of each other.)
+# (this is so two or more users can't do `go` within 10 seconds of each other.)
 # 
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
@@ -543,7 +543,7 @@ end
 # 
 def respond_with_help
   reply = <<help
-Type `#{ENV["BOT_USERNAME"]} jeopardy me` to start a new round of Slack Jeopardy. I will pick the category and price. Anyone in the channel can respond.
+Type `#{ENV["BOT_USERNAME"]} go` to start a new round of Slack Jeopardy. I will pick the category and price. Anyone in the channel can respond.
 Type `#{ENV["BOT_USERNAME"]} [what|where|who] [is|are] [answer]?` to respond to the active round. You have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. Remember, responses must be in the form of a question, e.g. `#{ENV["BOT_USERNAME"]} what is dirt?`.
 Type `#{ENV["BOT_USERNAME"]} show the categories` to see a list of 5 categories to choose.
 Type `#{ENV["BOT_USERNAME"]} I'll take [category]` start a new round with a specific category. I will pick the price.
