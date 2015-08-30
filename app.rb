@@ -108,7 +108,7 @@ end
 def respond_with_question(params, category = nil)
   channel_id = params[:channel_id]
   channel_name = params[:channel_name]
-  s = Redis::Semaphore.new(channel_id, :host => "localhost")
+  s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
   question = ""
   s.lock do
     
@@ -168,7 +168,7 @@ end
 
 def end_round(channel_id, channel_name, response) 
   puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
-  s = Redis::Semaphore.new(channel_id, :host => "localhost")
+  s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
   s.lock do
     # make sure the current question is the same one we were waiting for
     key = "current_question:#{channel_id}"
@@ -217,7 +217,7 @@ def process_answer(params)
   channel_id = params[:channel_id]
   user_id = params[:user_id]
   reply = ""
-  s = Redis::Semaphore.new(channel_id, :host => "localhost")
+  s = Redis::Semaphore.new(:local_semaphore => channel_id, :redis => $redis)
   s.lock do
     key = "current_question:#{channel_id}"
     current_question = $redis.get(key)
