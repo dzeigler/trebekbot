@@ -229,6 +229,7 @@ def end_round(params, response)
     puts "[LOG] (end_round) releasing lock for #{params[:channel_id]}"
   end
   puts "[LOG] (end_round) released lock for #{params[:channel_id]}"
+  redis2.quit
   reply
 end
 
@@ -247,6 +248,7 @@ def get_next_auto_clue(params)
     puts "[LOG] (get_next_auto_clue) releasing lock for #{params[:channel_id]}"
   end
   puts "[LOG] (get_next_auto_clue) sending question #{question}"
+  redis2.quit
   send_reply_to_slack(params[:channel_name], question)
 end
 
