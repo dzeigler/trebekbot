@@ -179,6 +179,7 @@ def get_question(category_key = nil)
   response = JSON.parse(request.body).first
   question = response["question"]
   invalid_count = response["invalid_count"]
+  clue_id = response["id"]
   if !invalid_count.nil? && invalid_count > 0
     puts "[LOG] Received an invalid question... requesting a new one"
     response = get_question
@@ -187,6 +188,19 @@ def get_question(category_key = nil)
     mark_question_as_invalid(response)
     response = get_question
   end
+  
+  if (!ENV["DUPLICATE_CLUE_TIMEOUT_IN_DAYS"].nil?) 
+    clue_key = "clue:#{clue_id}"
+    dupe = $redis.get(clue_key)
+    if (dupe.nil?)
+      timeout = ENV["DUPLICATE_CLUE_TIMEOUT_IN_DAYS"].to_i*24*60*60
+      $redis.setex(clue_key, timeout, "true")
+    else
+      puts "[LOG] This clue is a dupe... requesting a new one"
+      response = get_question
+    end
+  end
+  
   response["value"] = 200 if response["value"].nil?
   response["answer"] = Sanitize.fragment(response["answer"].gsub(/\s+(&nbsp;|&)\s+/i, " and "))
   response["expiration"] = Time.now.to_i + ENV["SECONDS_TO_ANSWER"].to_f
