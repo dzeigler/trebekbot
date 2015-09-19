@@ -178,7 +178,13 @@ def get_question(category_key = nil)
   puts "[LOG] #{request.body}"
   response = JSON.parse(request.body).first
   question = response["question"]
-  if question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
+  invalid_count = response["invalid_count"]
+  if !invalid_count.nil? && invalid_count > 0
+    puts "[LOG] Received an invalid question... requesting a new one"
+    response = get_question
+  elsif question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
+    puts "[LOG] Found a blacklisted question... reporting it and requesting a new one"
+    mark_question_as_invalid(response)
     response = get_question
   end
   response["value"] = 200 if response["value"].nil?
@@ -402,6 +408,12 @@ def mark_question_as_answered(channel_id)
     $redis.setex("shush:answer:#{channel_id}", 5, "true")
   end
 end
+
+def mark_question_as_invalid(response)
+  id = response["id"]
+  RestClient.post "http://jservice.io/api/invalid", :id => id
+end
+
 
 # Returns the given user's score.
 # 
