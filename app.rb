@@ -27,7 +27,6 @@ configure do
   $redis = Redis.new(host: uri.host, port: uri.port, password: uri.password)
 end
 
-
 # Handles the POST request made by the Slack Outgoing webhook
 # Params sent in the request:
 # 
@@ -312,6 +311,9 @@ def process_answer(params)
       score = update_score(user_id, current_question["value"])
       reply = "That is correct, #{get_slack_name(user_id)}. Your total score is #{currency_format(score)}."
       mark_question_as_answered(params[:channel_id])
+      if $redis.get("auto_clue:enabled:#{channel_id}") == "true"
+        prepare_to_get_next_auto_clue(params)
+      end
     elsif is_correct_answer?(current_answer, user_answer)
       score = update_score(user_id, (current_question["value"] * -1))
       reply = "That is correct, #{get_slack_name(user_id)}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
@@ -322,9 +324,7 @@ def process_answer(params)
       $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
     end
   end
-  if $redis.get("auto_clue:enabled:#{channel_id}") == "true"
-    prepare_to_get_next_auto_clue(params)
-  end
+  
   reply
 end
 
