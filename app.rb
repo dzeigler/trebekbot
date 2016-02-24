@@ -71,7 +71,7 @@ post "/" do
         elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
           response = respond_with_loserboard
         elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
-          response = respond_with_categories
+          response = respond_with_categories(params)
         elsif matches = params[:text].match(/^I.ll take (.*)/i)
           $redis.set("auto_clue:enabled:#{params[:channel_id]}", false)
           response = respond_with_question(params, matches[1])
@@ -274,22 +274,25 @@ end
 
 # Puts together the response to a request for categories:
 #
-def respond_with_categories
-	max_category = 18418
-  uri = "http://jservice.io/api/categories?count=5&offset=#{1+rand(max_category/5)}"
-  request = HTTParty.get(uri)
-  puts "[LOG] #{request.body}"
-
-  category_titles = []
-  data = JSON.parse(request.body)
-  data.each do |child|
-    category_titles << child['title']
-    key = "category:#{child['title']}"
-    $redis.set(key, child.to_json)
+def respond_with_categories(params)
+  channel_id = params[:channel_id]
+  unless $redis.exists("shush:question:#{channel_id}")
+	  max_category = 18418
+    uri = "http://jservice.io/api/categories?count=5&offset=#{1+rand(max_category/5)}"
+    request = HTTParty.get(uri)
+    puts "[LOG] #{request.body}"
+  
+    category_titles = []
+    data = JSON.parse(request.body)
+    data.each do |child|
+      category_titles << child['title']
+      key = "category:#{child['title']}"
+      $redis.set(key, child.to_json)
+    end
+    response = "Wonderful. Let's take a look at the categories. They are: `"
+    response += category_titles.join("`, `") + "`."
+    response
   end
-  response = "Wonderful. Let's take a look at the categories. They are: `"
-  response += category_titles.join("`, `") + "`."
-  response
 end
 
 # Processes an answer submitted by a user in response to a Jeopardy round:
